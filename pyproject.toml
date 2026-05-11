@@ -9,6 +9,7 @@ dependencies = [
     "jupyterlab>=4.5.7",
     "langdetect>=1.0.9",
     "matplotlib>=3.10.9",
+    "nltk>=3.9.4",
     "python-dotenv>=1.2.2",
     "scikit-learn>=1.8.0",
     "seaborn>=0.13.2",
