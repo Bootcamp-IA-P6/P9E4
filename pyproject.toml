@@ -5,9 +5,11 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "deep-translator>=1.11.4",
     "fastapi>=0.136.1",
     "jupyterlab>=4.5.7",
     "langdetect>=1.0.9",
+    "lightgbm>=4.6.0",
     "matplotlib>=3.10.9",
     "nltk>=3.9.4",
     "optuna>=4.8.0",
