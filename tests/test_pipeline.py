@@ -37,6 +37,7 @@ def preprocess(text):
     ]
     return ' '.join(tokens)
 
+
 # --- Tests de preprocesamiento ---
 def test_preprocess_lowercase():
     assert preprocess("HELLO WORLD") == "hello world"
@@ -126,3 +127,82 @@ def test_dataset_no_nulls():
 def test_dataset_binary_labels():
     df = pd.read_csv('../data/processed/comments_processed.csv')
     assert set(df['IsToxic'].unique()).issubset({0, 1})
+    
+# --- Tests de preprocesamiento edge cases ---
+def test_preprocess_only_numbers():
+    assert preprocess("123 456 789") == ""
+
+def test_preprocess_only_special_chars():
+    assert preprocess("!!! ??? ###") == ""
+
+def test_preprocess_very_long_text():
+    text = "hate " * 1000
+    result = preprocess(text)
+    assert isinstance(result, str)
+
+def test_preprocess_line_breaks():
+    result = preprocess("hello\r\nworld")
+    assert "\r" not in result
+    assert "\n" not in result
+
+def test_preprocess_multiple_spaces():
+    result = preprocess("hello     world")
+    assert "  " not in result
+
+# --- Tests del modelo con casos límite ---
+def test_model_empty_text():
+    model = joblib.load('../models/model_v1/ensemble_final.pkl')
+    tfidf = joblib.load('../models/model_v1/tfidf_final.pkl')
+    text = preprocess("")
+    vector = tfidf.transform([text])
+    pred = model.predict(vector)
+    assert pred[0] in [0, 1]
+
+def test_model_multiple_comments():
+    model = joblib.load('../models/model_v1/ensemble_final.pkl')
+    tfidf = joblib.load('../models/model_v1/tfidf_final.pkl')
+    texts = [
+        preprocess("i hate you"),
+        preprocess("beautiful day today"),
+        preprocess("racist idiot go away")
+    ]
+    vectors = tfidf.transform(texts)
+    preds = model.predict(vectors)
+    assert len(preds) == 3
+    assert all(p in [0, 1] for p in preds)
+
+def test_model_proba_between_0_and_1():
+    model = joblib.load('../models/model_v1/ensemble_final.pkl')
+    tfidf = joblib.load('../models/model_v1/tfidf_final.pkl')
+    text = preprocess("some random comment")
+    vector = tfidf.transform([text])
+    proba = model.predict_proba(vector)
+    assert all(0 <= p <= 1 for p in proba[0])
+
+# --- Tests del dataset enriquecido ---
+def test_enriched_dataset_loads():
+    df = pd.read_csv('../data/raw/dataset_enriquecido.csv')
+    assert len(df) > 1000
+
+def test_enriched_dataset_balance():
+    df = pd.read_csv('../data/raw/dataset_enriquecido.csv')
+    balance = df['IsToxic'].value_counts(normalize=True)
+    assert balance.max() < 0.60
+
+def test_enriched_dataset_no_duplicates():
+    df = pd.read_csv('../data/raw/dataset_enriquecido.csv')
+    assert df.duplicated().sum() == 0
+
+# --- Tests de vectorización ---
+def test_tfidf_output_shape():
+    tfidf = joblib.load('../models/model_v1/tfidf_final.pkl')
+    texts = ["hello world", "racist comment here"]
+    vectors = tfidf.transform(texts)
+    assert vectors.shape[0] == 2
+    assert vectors.shape[1] == tfidf.vocabulary_.__len__()
+
+def test_tfidf_unknown_words():
+    tfidf = joblib.load('../models/model_v1/tfidf_final.pkl')
+    text = ["xyzabcdefgh unknown gibberish words"]
+    vector = tfidf.transform(text)
+    assert vector.shape == (1, tfidf.vocabulary_.__len__())
