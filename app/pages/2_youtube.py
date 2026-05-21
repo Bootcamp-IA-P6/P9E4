@@ -3,7 +3,6 @@ import sys
 from pathlib import Path
 import os
 import re
-import time
 from googleapiclient.discovery import build
 from dotenv import load_dotenv
 import pandas as pd
@@ -13,29 +12,39 @@ load_dotenv(Path(__file__).parent.parent.parent / '.env')
 sys.path.append(str(Path(__file__).parent.parent))
 
 from utils.preprocessing import preprocess
-from utils.model import load_model, predict
+from utils.model import load_model, predict, label_for, MODELS
 from utils.database import save_prediction
+from utils.sidebar import render_sidebar
+from utils.ui import page_header, color_by_verdict, render_video_preview, empty_state
 
 st.set_page_config(page_title="Análisis por URL", page_icon="🎥", layout="wide")
 
-st.title("🎥 Análisis de comentarios por URL")
-st.markdown("Introduce la URL de un vídeo de YouTube para analizar sus comentarios.")
+active = render_sidebar()
+
+page_header(
+    "Análisis de comentarios por URL",
+    "Introduce la URL de un vídeo de YouTube para analizar sus comentarios.",
+    icon="🎥",
+)
+
+st.caption(f"Modelo activo: **{MODELS[active]['display']}** — cámbialo desde el sidebar.")
+
 
 @st.cache_resource
-def get_model():
-    return load_model()
+def get_model(name: str):
+    return load_model(name)
+
 
 @st.cache_resource
 def get_youtube():
     api_key = os.getenv('YOUTUBE_API_KEY')
     return build('youtube', 'v3', developerKey=api_key)
 
-model, tfidf = get_model()
 
-def extract_video_id(url: str) -> str:
+def extract_video_id(url: str) -> str | None:
     patterns = [
         r'(?:v=|\/)([0-9A-Za-z_-]{11})',
-        r'(?:youtu\.be\/)([0-9A-Za-z_-]{11})'
+        r'(?:youtu\.be\/)([0-9A-Za-z_-]{11})',
     ]
     for pattern in patterns:
         match = re.search(pattern, url)
@@ -43,13 +52,14 @@ def extract_video_id(url: str) -> str:
             return match.group(1)
     return None
 
+
 def get_comments(youtube, video_id: str, max_comments: int = 100) -> list:
     comments = []
     request = youtube.commentThreads().list(
         part='snippet',
         videoId=video_id,
         maxResults=min(max_comments, 100),
-        textFormat='plainText'
+        textFormat='plainText',
     )
     while request and len(comments) < max_comments:
         response = request.execute()
@@ -59,124 +69,214 @@ def get_comments(youtube, video_id: str, max_comments: int = 100) -> list:
                 'text':   comment['textDisplay'],
                 'author': comment['authorDisplayName'],
                 'likes':  comment['likeCount'],
-                'date':   comment['publishedAt'][:10]
+                'date':   comment['publishedAt'][:10],
             })
         request = youtube.commentThreads().list_next(request, response)
     return comments[:max_comments]
 
+
+def pretty(verdict: str) -> str:
+    return {"toxic": "🔴 Tóxico", "nontoxic": "🟢 No tóxico", "uncertain": "🟡 Incierto"}[verdict]
+
+
 # --- UI ---
 url_input = st.text_input(
     "URL del vídeo",
-    placeholder="https://www.youtube.com/watch?v=..."
+    placeholder="https://www.youtube.com/watch?v=...",
 )
 
-col1, col2 = st.columns(2)
+# Preview del vídeo cuando la URL es válida
+if url_input.strip():
+    vid = extract_video_id(url_input)
+    if vid:
+        try:
+            render_video_preview(get_youtube(), vid)
+        except Exception:
+            pass
+
+col1, col2, col3 = st.columns([1, 1, 1])
 with col1:
     max_comments = st.slider("Número máximo de comentarios", 10, 200, 50)
 with col2:
     save_all = st.checkbox("Guardar predicciones en base de datos", value=True)
+with col3:
+    compare = st.checkbox(
+        "Comparar todos los modelos",
+        value=False,
+        help="Ejecuta cada modelo sobre todos los comentarios. Más lento.",
+    )
 
 analyze = st.button("🔍 Analizar comentarios", type="primary")
 
-if analyze and url_input.strip():
-    video_id = extract_video_id(url_input)
 
-    if not video_id:
-        st.error("URL no válida. Asegúrate de que es un enlace de YouTube.")
+# --- Lanzar análisis ---
+if analyze:
+    if not url_input.strip():
+        st.warning("Por favor introduce una URL.")
     else:
-        try:
-            youtube = get_youtube()
+        video_id = extract_video_id(url_input)
+        if not video_id:
+            st.error("URL no válida. Asegúrate de que es un enlace de YouTube.")
+        else:
+            try:
+                youtube = get_youtube()
+                model_keys = list(MODELS.keys()) if compare else [active]
+                loaded = {name: get_model(name) for name in model_keys}
 
-            with st.spinner("Obteniendo comentarios..."):
-                comments = get_comments(youtube, video_id, max_comments)
+                with st.spinner("Obteniendo comentarios..."):
+                    comments = get_comments(youtube, video_id, max_comments)
 
-            if not comments:
-                st.warning("No se encontraron comentarios en este vídeo.")
-            else:
-                st.info(f"Analizando {len(comments)} comentarios...")
-                progress = st.progress(0)
-                results = []
-
-                for i, comment in enumerate(comments):
-                    text_clean = preprocess(comment['text'])
-                    pred, proba = predict(text_clean, model, tfidf)
-
-                    results.append({
-                        'Comentario': comment['text'][:100] + '...' if len(comment['text']) > 100 else comment['text'],
-                        'Autor':      comment['author'],
-                        'Resultado':  '🔴 Tóxico' if pred == 1 else '🟢 No tóxico',
-                        'Probabilidad': f"{proba*100:.1f}%",
-                        'Likes':      comment['likes'],
-                        'Fecha':      comment['date'],
-                        '_pred':      pred,
-                        '_proba':     proba,
-                        '_text':      comment['text'],
-                        '_clean':     text_clean
-                    })
-
-                    if save_all:
-                        try:
-                            save_prediction(
-                                text=comment['text'],
-                                text_clean=text_clean,
-                                prediction=pred,
-                                probability=proba,
-                                source='youtube',
-                                video_url=url_input
-                            )
-                        except Exception:
-                            pass
-
-                    progress.progress((i + 1) / len(comments))
-
-                progress.empty()
-
-                # Métricas
-                df = pd.DataFrame(results)
-                toxic_count    = df['_pred'].sum()
-                nontoxic_count = len(df) - toxic_count
-                toxic_pct      = toxic_count / len(df) * 100
-
-                st.divider()
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Total comentarios", len(df))
-                col2.metric("🔴 Tóxicos",     f"{toxic_count} ({toxic_pct:.1f}%)")
-                col3.metric("🟢 No tóxicos",  f"{nontoxic_count}")
-                col4.metric("Probabilidad media", f"{df['_proba'].mean()*100:.1f}%")
-
-                st.divider()
-
-                # Filtro
-                filtro = st.radio(
-                    "Mostrar",
-                    ["Todos", "Solo tóxicos", "Solo no tóxicos"],
-                    horizontal=True
-                )
-
-                if filtro == "Solo tóxicos":
-                    df_show = df[df['_pred'] == 1]
-                elif filtro == "Solo no tóxicos":
-                    df_show = df[df['_pred'] == 0]
+                if not comments:
+                    st.warning("No se encontraron comentarios en este vídeo.")
                 else:
-                    df_show = df
+                    info = st.empty()
+                    info.info(
+                        f"Analizando {len(comments)} comentarios con "
+                        f"{len(loaded)} modelo{'s' if len(loaded) > 1 else ''}..."
+                    )
+                    progress = st.progress(0)
+                    results = []
 
-                st.dataframe(
-                    df_show[['Comentario', 'Autor', 'Resultado', 'Probabilidad', 'Likes', 'Fecha']],
-                    use_container_width=True,
-                    hide_index=True
-                )
+                    for i, comment in enumerate(comments):
+                        text_clean = preprocess(comment['text'])
+                        row = {
+                            'Comentario': comment['text'][:100] + ('...' if len(comment['text']) > 100 else ''),
+                            'Autor':      comment['author'],
+                            'Likes':      comment['likes'],
+                            'Fecha':      comment['date'],
+                            '_text':      comment['text'],
+                            '_clean':     text_clean,
+                        }
+                        for name, (mdl, tfidf) in loaded.items():
+                            pred, proba = predict(text_clean, mdl, tfidf)
+                            verdict = label_for(proba)
+                            display = MODELS[name]['display']
+                            row[f'Resultado ({display})'] = pretty(verdict)
+                            row[f'Prob. tóxico ({display})'] = f"{proba * 100:.1f}%"
+                            row[f'_pred_{name}'] = pred
+                            row[f'_proba_{name}'] = proba
+                            row[f'_verdict_{name}'] = verdict
 
-                # Descargar CSV
-                csv = df_show[['Comentario', 'Autor', 'Resultado', 'Probabilidad', 'Likes', 'Fecha']].to_csv(index=False)
-                st.download_button(
-                    "⬇️ Descargar resultados CSV",
-                    csv,
-                    "resultados_toxicidad.csv",
-                    "text/csv"
-                )
+                        if save_all:
+                            try:
+                                save_prediction(
+                                    text=comment['text'],
+                                    text_clean=text_clean,
+                                    prediction=row[f'_pred_{active}'],
+                                    probability=row[f'_proba_{active}'],
+                                    source='youtube',
+                                    video_url=url_input,
+                                )
+                            except Exception:
+                                pass
 
-        except Exception as e:
-            st.error(f"Error al obtener comentarios: {e}")
+                        results.append(row)
+                        progress.progress((i + 1) / len(comments))
 
-elif analyze and not url_input.strip():
-    st.warning("Por favor introduce una URL.")
+                    progress.empty()
+                    info.empty()
+
+                    st.session_state['yt_results'] = pd.DataFrame(results)
+                    st.session_state['yt_url'] = url_input
+                    st.session_state['yt_models'] = model_keys
+                    st.session_state['yt_compare'] = compare
+
+            except Exception as e:
+                st.error(f"Error al obtener comentarios: {e}")
+
+
+# --- Mostrar resultados ---
+df = st.session_state.get('yt_results')
+if df is not None and not df.empty:
+    st.divider()
+
+    model_keys = st.session_state.get('yt_models', [active])
+    is_compare = st.session_state.get('yt_compare', False)
+    models_label = ", ".join(MODELS[k]['display'] for k in model_keys)
+    st.caption(
+        f"Resultados de [{st.session_state.get('yt_url', '?')}]({st.session_state.get('yt_url', '#')}) — "
+        f"modelo{'s' if is_compare else ''}: **{models_label}**"
+    )
+
+    # KPIs con el modelo activo (o el único si no estamos en compare)
+    kpi_model = active if active in model_keys else model_keys[0]
+    verdict_col = f'_verdict_{kpi_model}'
+    proba_col = f'_proba_{kpi_model}'
+
+    toxic = int((df[verdict_col] == 'toxic').sum())
+    nontoxic = int((df[verdict_col] == 'nontoxic').sum())
+    uncertain = int((df[verdict_col] == 'uncertain').sum())
+    total = len(df)
+
+    if is_compare:
+        st.caption(f"Las métricas se calculan con **{MODELS[kpi_model]['display']}**.")
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Total comentarios", total)
+    c2.metric("🔴 Tóxicos", f"{toxic} ({toxic / total * 100:.1f}%)")
+    c3.metric("🟢 No tóxicos", nontoxic)
+    c4.metric("🟡 Inciertos", uncertain)
+    c5.metric("Prob. tóxico media", f"{df[proba_col].mean() * 100:.1f}%")
+
+    # En modo compare, mostrar también cuántos discrepan
+    if is_compare and len(model_keys) >= 2:
+        a, b = model_keys[0], model_keys[1]
+        disagreements = int((df[f'_pred_{a}'] != df[f'_pred_{b}']).sum())
+        st.info(
+            f"📊 Los dos modelos discrepan en **{disagreements}** comentarios "
+            f"de {total} ({disagreements / total * 100:.1f}%)."
+        )
+
+    st.divider()
+
+    # Filtro
+    filter_options = ["Todos", "Solo tóxicos", "Solo no tóxicos", "Solo inciertos"]
+    if is_compare and len(model_keys) >= 2:
+        filter_options.append("Solo discrepancias")
+
+    filtro = st.radio(
+        f"Mostrar (filtro sobre {MODELS[kpi_model]['display']})" if is_compare else "Mostrar",
+        filter_options,
+        horizontal=True,
+        key="yt_filter",
+    )
+
+    if filtro == "Solo tóxicos":
+        df_show = df[df[verdict_col] == 'toxic']
+    elif filtro == "Solo no tóxicos":
+        df_show = df[df[verdict_col] == 'nontoxic']
+    elif filtro == "Solo inciertos":
+        df_show = df[df[verdict_col] == 'uncertain']
+    elif filtro == "Solo discrepancias" and is_compare and len(model_keys) >= 2:
+        a, b = model_keys[0], model_keys[1]
+        df_show = df[df[f'_pred_{a}'] != df[f'_pred_{b}']]
+    else:
+        df_show = df
+
+    # Columnas visibles
+    base_cols = ['Comentario', 'Autor']
+    for name in model_keys:
+        display = MODELS[name]['display']
+        base_cols += [f'Resultado ({display})', f'Prob. tóxico ({display})']
+    base_cols += ['Likes', 'Fecha']
+
+    styled = df_show.style.apply(color_by_verdict(verdict_col), axis=1)
+    st.dataframe(
+        styled,
+        use_container_width=True,
+        hide_index=True,
+        column_order=base_cols,
+    )
+
+    csv = df_show[base_cols].to_csv(index=False)
+    st.download_button(
+        "⬇️ Descargar resultados CSV",
+        csv,
+        "resultados_toxicidad.csv",
+        "text/csv",
+    )
+
+    if st.button("🗑️ Limpiar resultados", type="secondary"):
+        for k in ('yt_results', 'yt_url', 'yt_models', 'yt_compare'):
+            st.session_state.pop(k, None)
+        st.rerun()
