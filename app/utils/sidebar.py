@@ -1,14 +1,7 @@
 import streamlit as st
-<<<<<<< HEAD
 from pathlib import Path
 from utils.model import MODELS, DEFAULT_MODEL, model_options
 
-=======
-
-from utils.model import MODELS, DEFAULT_MODEL, model_options
-
-
->>>>>>> 4d1cc9fa50a03ef6012b7c56a662e009e32e91ae
 def render_sidebar():
     """Sidebar común a todas las páginas: selector de modelo + info."""
     if "active_model" not in st.session_state:
@@ -17,7 +10,6 @@ def render_sidebar():
     with st.sidebar:
         st.markdown("### 🛡️ Hate Speech Detector")
 
-<<<<<<< HEAD
         # Navegación
         st.markdown("#### Navegación")
         if st.button("🏠 Inicio",              use_container_width=True):
@@ -36,10 +28,6 @@ def render_sidebar():
         # Selector de modelo
         options = model_options()
         keys    = list(options.keys())
-=======
-        options = model_options()
-        keys = list(options.keys())
->>>>>>> 4d1cc9fa50a03ef6012b7c56a662e009e32e91ae
         current = st.session_state["active_model"]
         selected = st.selectbox(
             "Modelo activo",
@@ -58,8 +46,4 @@ def render_sidebar():
         st.divider()
         st.markdown("Factoria F5 — Madrid AI Bootcamp")
 
-<<<<<<< HEAD
     return st.session_state["active_model"]
-=======
-    return st.session_state["active_model"]
->>>>>>> 4d1cc9fa50a03ef6012b7c56a662e009e32e91ae
