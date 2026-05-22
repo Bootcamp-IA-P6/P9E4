@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from pathlib import Path
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 ROOT = Path(__file__).parent.parent.parent
 
@@ -49,6 +50,13 @@ MODELS = {
         "description": "Red neuronal LSTM. F1 0.899, dataset 10k comentarios.",
         "type":        "lstm"
     },
+    "distilbert": {
+        "display":     "DistilBERT (transformer)",
+        "hf_model":    "Michh14/youtube-hate-speech-distilbert",
+        "description": "Transformer fine-tuned. F1 0.955, overfitting 0.028. Más lento.",
+        "type":        "bert",
+        "threshold": 0.35
+    },
 }
 
 DEFAULT_MODEL = "logreg_v3"
@@ -65,14 +73,19 @@ def load_model(name: str = DEFAULT_MODEL):
         raise ValueError(f"Modelo desconocido: {name}. Opciones: {list(MODELS)}")
     info = MODELS[name]
 
-    if info["type"] == "lstm":
+    if info["type"] == "bert":
+        tokenizer = AutoTokenizer.from_pretrained(info["hf_model"])
+        model = AutoModelForSequenceClassification.from_pretrained(info["hf_model"])
+        model.eval()
+        model.to(device)
+        return model, tokenizer
+
+    elif info["type"] == "lstm":
         vocab = torch.load(info["vocab_path"], map_location=device, weights_only=False)
         model = LSTMClassifier(
             vocab_size=len(vocab),
-            embed_dim=100,
-            hidden_dim=128,
-            n_layers=2,
-            dropout=0.3
+            embed_dim=100, hidden_dim=128,
+            n_layers=2, dropout=0.3
         ).to(device)
         model.load_state_dict(torch.load(info["model_path"], map_location=device, weights_only=False))
         model.eval()
@@ -91,26 +104,45 @@ def _text_to_indices(text: str, vocab: dict, max_len: int = MAX_LEN) -> list:
     return indices
 
 
-def predict(text_clean: str, model, tfidf_or_vocab) -> tuple[int, float]:
-    # LSTM
-    if isinstance(model, LSTMClassifier):
-        vocab   = tfidf_or_vocab
+def predict(text_clean: str, model, tfidf_or_vocab, model_type: str = None) -> tuple[int, float]:
+    
+    # Detectar tipo por clase
+    if hasattr(tfidf_or_vocab, 'encode_plus') or 'Tokenizer' in type(tfidf_or_vocab).__name__:
+        # BERT
+        tokenizer = tfidf_or_vocab
+        encoding = tokenizer(
+            text_clean,
+            max_length=128,
+            padding='max_length',
+            truncation=True,
+            return_tensors='pt'
+        ).to(device)
+        with torch.no_grad():
+            output = model(**encoding)
+        proba = torch.softmax(output.logits, dim=1)[0]
+        proba_toxic = float(proba[1].item())
+        threshold = MODELS.get('distilbert', {}).get('threshold', 0.5)
+        pred = int(proba_toxic >= threshold)
+        return pred, proba_toxic
+
+    elif isinstance(model, LSTMClassifier):
+        vocab = tfidf_or_vocab
         indices = _text_to_indices(text_clean, vocab)
-        tensor  = torch.tensor([indices], dtype=torch.long).to(device)
+        tensor = torch.tensor([indices], dtype=torch.long).to(device)
         with torch.no_grad():
             logit = model(tensor)
             proba_toxic = float(torch.sigmoid(logit).item())
         pred = int(proba_toxic >= 0.5)
         return pred, proba_toxic
 
-    # Sklearn
-    vector      = tfidf_or_vocab.transform([text_clean])
-    proba       = model.predict_proba(vector)[0]
-    classes     = list(model.classes_)
-    toxic_idx   = classes.index(max(classes))
-    proba_toxic = float(proba[toxic_idx])
-    pred        = int(proba_toxic >= 0.5)
-    return pred, proba_toxic
+    else:
+        vector = tfidf_or_vocab.transform([text_clean])
+        proba = model.predict_proba(vector)[0]
+        classes = list(model.classes_)
+        toxic_idx = classes.index(max(classes))
+        proba_toxic = float(proba[toxic_idx])
+        pred = int(proba_toxic >= 0.5)
+        return pred, proba_toxic
 
 
 def label_for(proba_toxic: float) -> str:
