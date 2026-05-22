@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 import os
 import re
+import time
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from dotenv import load_dotenv
@@ -318,3 +319,117 @@ if df is not None and not df.empty:
         for k in ('yt_results', 'yt_url', 'yt_models', 'yt_compare'):
             st.session_state.pop(k, None)
         st.rerun()
+
+# --- Modo monitoreo en tiempo real ---
+st.divider()
+st.subheader("🔴 Monitoreo en tiempo real")
+st.caption("Detecta comentarios nuevos automáticamente cada X segundos.")
+
+col1, col2 = st.columns(2)
+with col1:
+    interval = st.slider("Intervalo de actualización (segundos)", 10, 60, 30)
+with col2:
+    monitor = st.toggle("Activar monitoreo", value=False)
+
+if monitor:
+    if not url_input.strip():
+        st.warning("Introduce una URL antes de activar el monitoreo.")
+    else:
+        video_id = extract_video_id(url_input)
+        if not video_id:
+            st.error("URL no válida.")
+        else:
+            # Inicializar estado
+            if 'monitor_seen' not in st.session_state:
+                st.session_state['monitor_seen'] = set()
+            if 'monitor_toxic' not in st.session_state:
+                st.session_state['monitor_toxic'] = []
+
+            status = st.empty()
+            alert_box = st.empty()
+            counter = st.empty()
+
+            try:
+                youtube = get_youtube()
+                model, tfidf = get_model(active)
+
+                with st.spinner("Obteniendo comentarios actuales..."):
+                    comments = get_comments(youtube, video_id, 100)
+
+                # Marcar comentarios existentes como ya vistos
+                for c in comments:
+                    st.session_state['monitor_seen'].add(c['text'][:50])
+
+                status.success(
+                    f"✅ Monitoreo activo — revisando cada {interval}s — "
+                    f"{len(st.session_state['monitor_seen'])} comentarios base ignorados"
+                )
+
+                time.sleep(interval)
+
+                # Nueva consulta
+                new_comments = get_comments(youtube, video_id, 100)
+                nuevos = [
+                    c for c in new_comments
+                    if c['text'][:50] not in st.session_state['monitor_seen']
+                ]
+
+                if nuevos:
+                    for c in nuevos:
+                        st.session_state['monitor_seen'].add(c['text'][:50])
+                        text_clean = preprocess(c['text'])
+                        pred, proba = predict(text_clean, model, tfidf)
+                        verdict = label_for(proba)
+
+                        if verdict == 'toxic':
+                            st.session_state['monitor_toxic'].append({
+                                'texto': c['text'],
+                                'autor': c['author'],
+                                'prob':  proba
+                            })
+
+                            if save_all:
+                                try:
+                                    save_prediction(
+                                        text=c['text'],
+                                        text_clean=text_clean,
+                                        prediction=pred,
+                                        probability=proba,
+                                        source='realtime',
+                                        video_url=url_input
+                                    )
+                                except Exception:
+                                    pass
+
+                    toxic_nuevos = [
+                        c for c in nuevos
+                        if label_for(predict(preprocess(c['text']), model, tfidf)[1]) == 'toxic'
+                    ]
+
+                    if toxic_nuevos:
+                        alert_box.error(
+                            f"🚨 {len(toxic_nuevos)} comentario(s) tóxico(s) nuevo(s) detectado(s)"
+                        )
+                    else:
+                        alert_box.info(f"✅ {len(nuevos)} comentario(s) nuevo(s) — ninguno tóxico")
+                else:
+                    alert_box.info("No hay comentarios nuevos desde la última revisión.")
+
+                # Mostrar historial de tóxicos detectados
+                if st.session_state['monitor_toxic']:
+                    counter.metric(
+                        "🔴 Tóxicos detectados en esta sesión",
+                        len(st.session_state['monitor_toxic'])
+                    )
+                    with st.expander("Ver comentarios tóxicos detectados"):
+                        for item in st.session_state['monitor_toxic']:
+                            st.error(
+                                f"**{item['autor']}** ({item['prob']*100:.1f}%): {item['texto'][:200]}"
+                            )
+
+            except Exception as e:
+                st.error(f"Error en monitoreo: {e}")
+
+            # Rerun automático para continuar el monitoreo
+            time.sleep(1)
+            st.rerun()
