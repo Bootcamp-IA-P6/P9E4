@@ -4,6 +4,7 @@ from pathlib import Path
 import os
 import re
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from dotenv import load_dotenv
 import pandas as pd
 
@@ -15,7 +16,7 @@ from utils.preprocessing import preprocess
 from utils.model import load_model, predict, label_for, MODELS
 from utils.database import save_prediction
 from utils.sidebar import render_sidebar
-from utils.ui import page_header, color_by_verdict, render_video_preview, empty_state
+from utils.ui import page_header, color_by_verdict, render_video_preview
 
 st.set_page_config(page_title="Análisis por URL", page_icon="🎥", layout="wide")
 
@@ -86,13 +87,14 @@ url_input = st.text_input(
 )
 
 # Preview del vídeo cuando la URL es válida
+video_info = None
 if url_input.strip():
     vid = extract_video_id(url_input)
     if vid:
         try:
-            render_video_preview(get_youtube(), vid)
+            video_info = render_video_preview(get_youtube(), vid)
         except Exception:
-            pass
+            video_info = None
 
 col1, col2, col3 = st.columns([1, 1, 1])
 with col1:
@@ -106,7 +108,25 @@ with col3:
         help="Ejecuta cada modelo sobre todos los comentarios. Más lento.",
     )
 
-analyze = st.button("🔍 Analizar comentarios", type="primary")
+# Decidir si el botón se puede activar
+can_analyze = True
+block_msg = None
+if video_info is not None:
+    if video_info["comments_disabled"]:
+        can_analyze = False
+        block_msg = "🚫 Este vídeo tiene los comentarios desactivados por su creador. Prueba con otro vídeo."
+    elif video_info["comment_count"] == 0:
+        can_analyze = False
+        block_msg = "💬 Este vídeo no tiene comentarios todavía. Prueba con otro."
+
+if block_msg:
+    st.warning(block_msg)
+
+analyze = st.button(
+    "🔍 Analizar comentarios",
+    type="primary",
+    disabled=not can_analyze,
+)
 
 
 # --- Lanzar análisis ---
@@ -140,11 +160,10 @@ if analyze:
                     for i, comment in enumerate(comments):
                         text_clean = preprocess(comment['text'])
                         row = {
-                            'Comentario': comment['text'][:100] + ('...' if len(comment['text']) > 100 else ''),
+                            'Comentario': comment['text'],
                             'Autor':      comment['author'],
                             'Likes':      comment['likes'],
                             'Fecha':      comment['date'],
-                            '_text':      comment['text'],
                             '_clean':     text_clean,
                         }
                         for name, (mdl, tfidf) in loaded.items():
@@ -181,6 +200,21 @@ if analyze:
                     st.session_state['yt_models'] = model_keys
                     st.session_state['yt_compare'] = compare
 
+            except HttpError as e:
+                reason = ""
+                try:
+                    reason = e.error_details[0].get("reason", "") if e.error_details else ""
+                except Exception:
+                    pass
+                msg = str(e)
+                if reason == "commentsDisabled" or "commentsDisabled" in msg:
+                    st.error("🚫 Este vídeo tiene los comentarios desactivados. Prueba con otro.")
+                elif reason in ("quotaExceeded", "rateLimitExceeded"):
+                    st.error("⏳ Se ha excedido la cuota de la YouTube API. Espera un rato e inténtalo de nuevo.")
+                elif reason == "videoNotFound" or "videoNotFound" in msg:
+                    st.error("❓ No se encontró el vídeo. ¿La URL es correcta?")
+                else:
+                    st.error(f"Error de YouTube: {reason or e.resp.status}")
             except Exception as e:
                 st.error(f"Error al obtener comentarios: {e}")
 
@@ -266,6 +300,10 @@ if df is not None and not df.empty:
         use_container_width=True,
         hide_index=True,
         column_order=base_cols,
+        column_config={
+            "Comentario": st.column_config.TextColumn(width="large"),
+            "Autor": st.column_config.TextColumn(width="small"),
+        },
     )
 
     csv = df_show[base_cols].to_csv(index=False)

@@ -55,19 +55,22 @@ def color_by_verdict(verdict_col: str):
 
 
 def render_video_preview(youtube, video_id: str):
-    """Pinta thumbnail + título del vídeo si los datos están disponibles."""
+    """Pinta thumbnail + título del vídeo. Devuelve dict con metadatos o None."""
     try:
         resp = youtube.videos().list(part="snippet,statistics", id=video_id).execute()
         items = resp.get("items", [])
         if not items:
-            return False
+            return None
         info = items[0]["snippet"]
         stats = items[0].get("statistics", {})
         thumb = info["thumbnails"].get("medium", info["thumbnails"]["default"])["url"]
         title = info["title"]
         channel = info["channelTitle"]
         views = int(stats.get("viewCount", 0))
-        comments_n = int(stats.get("commentCount", 0))
+        # commentCount falta del payload cuando los comentarios están deshabilitados
+        comments_n = stats.get("commentCount")
+        comments_disabled = comments_n is None
+        comments_n = int(comments_n) if comments_n is not None else 0
 
         col1, col2 = st.columns([1, 3])
         with col1:
@@ -77,7 +80,15 @@ def render_video_preview(youtube, video_id: str):
             st.caption(f"📺 {channel}")
             mcol1, mcol2 = st.columns(2)
             mcol1.metric("👁 Visualizaciones", f"{views:,}".replace(",", "."))
-            mcol2.metric("💬 Comentarios totales", f"{comments_n:,}".replace(",", "."))
-        return True
+            comments_label = "🚫 Deshabilitados" if comments_disabled else f"{comments_n:,}".replace(",", ".")
+            mcol2.metric("💬 Comentarios totales", comments_label)
+
+        return {
+            "title": title,
+            "channel": channel,
+            "views": views,
+            "comment_count": comments_n,
+            "comments_disabled": comments_disabled,
+        }
     except Exception:
-        return False
+        return None
