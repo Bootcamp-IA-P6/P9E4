@@ -7,6 +7,7 @@ COLOR_UNCERTAIN = "#FFD166"
 
 
 def page_header(title: str, subtitle: str = "", icon: str = ""):
+<<<<<<< HEAD
     # Ocultar navegación automática de Streamlit
     st.markdown("""
         <style>
@@ -14,6 +15,8 @@ def page_header(title: str, subtitle: str = "", icon: str = ""):
         </style>
     """, unsafe_allow_html=True)
     
+=======
+>>>>>>> 4d1cc9fa50a03ef6012b7c56a662e009e32e91ae
     """Cabecera consistente para todas las páginas."""
     icon_html = f"<span style='font-size: 2.2rem; margin-right: .6rem'>{icon}</span>" if icon else ""
     st.markdown(
