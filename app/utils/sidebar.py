@@ -1,7 +1,6 @@
 import streamlit as st
-
+from pathlib import Path
 from utils.model import MODELS, DEFAULT_MODEL, model_options
-
 
 def render_sidebar():
     """Sidebar común a todas las páginas: selector de modelo + info."""
@@ -11,8 +10,24 @@ def render_sidebar():
     with st.sidebar:
         st.markdown("### 🛡️ Hate Speech Detector")
 
+        # Navegación
+        st.markdown("#### Navegación")
+        if st.button("🏠 Inicio",              use_container_width=True):
+            st.switch_page("app.py")
+        if st.button("🔍 Análisis de texto",   use_container_width=True):
+            st.switch_page("pages/1_texto.py")
+        if st.button("🎥 Análisis por URL",    use_container_width=True):
+            st.switch_page("pages/2_youtube.py")
+        if st.button("💬 Feedback",            use_container_width=True):
+            st.switch_page("pages/3_feedback.py")
+        if st.button("📊 Dashboard",           use_container_width=True):
+            st.switch_page("pages/4_dashboard.py")
+
+        st.divider()
+
+        # Selector de modelo
         options = model_options()
-        keys = list(options.keys())
+        keys    = list(options.keys())
         current = st.session_state["active_model"]
         selected = st.selectbox(
             "Modelo activo",

@@ -203,10 +203,3 @@ st.dataframe(
 
 st.divider()
 
-# ---------- Métricas estáticas del modelo ----------
-st.subheader("Métricas del modelo (entrenamiento)")
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("F1 Score", "0.909")
-c2.metric("Overfitting gap", "0.039")
-c3.metric("Modelo", "Logistic Regression")
-c4.metric("Dataset", "10.414 comentarios")
