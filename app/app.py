@@ -31,6 +31,8 @@ st.markdown(
     border-radius: 12px;
     padding: 1.2rem 1.3rem;
     height: 100%;
+    margin-bottom: 1rem;
+
 }
 .card h4 { margin: .2rem 0 .5rem 0; color: #E6E9EF; }
 .card p  { margin: 0; color: #9aa4b2; font-size: .92rem; line-height: 1.4; }
